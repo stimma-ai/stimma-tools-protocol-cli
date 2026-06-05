@@ -1,0 +1,71 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build/publish (e.g. v0.1.0)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: aarch64-apple-darwin,        os: macos-14 }
+          # Cross-build the Intel-mac binary on the plentiful Apple-Silicon runner; the scarce
+          # macos-13 Intel runners queue for ages.
+          - { target: x86_64-apple-darwin,         os: macos-14 }
+          - { target: x86_64-unknown-linux-gnu,    os: ubuntu-latest }
+          - { target: aarch64-unknown-linux-gnu,   os: ubuntu-24.04-arm }
+          - { target: x86_64-pc-windows-msvc,      os: windows-latest }
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install NASM (Windows, for aws-lc-rs)
+        if: runner.os == 'Windows'
+        uses: ilammy/setup-nasm@v1
+
+      - name: Install build deps (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y cmake
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --locked -p stp --target ${{ matrix.target }}
+
+      - name: Package (unix)
+        if: runner.os != 'Windows'
+        run: |
+          tar czf "stp-${{ matrix.target }}.tar.gz" -C "target/${{ matrix.target }}/release" stp
+
+      - name: Package (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "target/${{ matrix.target }}/release/stp.exe" -DestinationPath "stp-${{ matrix.target }}.zip"
+
+      - name: Publish to release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          files: |
+            stp-${{ matrix.target }}.tar.gz
+            stp-${{ matrix.target }}.zip
+          fail_on_unmatched_files: false

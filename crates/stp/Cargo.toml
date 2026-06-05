@@ -1,0 +1,43 @@
+[package]
+name = "stp"
+description = "Command-line host for the Stimma Tools Protocol"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "stp"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+anstream = "1.0.0"
+anstyle = "1.0.14"
+anyhow = "1.0.102"
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
+clap = { version = "4.6.1", features = ["derive"] }
+clap_complete = "4.6.5"
+etcetera = "0.10.0"
+indicatif = "0.18.4"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+serde_yaml_ng = "0.10.0"
+shlex = "2.0.1"
+stp-client = { version = "0.1.0", path = "../stp-client" }
+tabwriter = "1.4.1"
+tokio = { version = "1.52.3", features = ["rt", "macros", "signal", "io-std", "io-util"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+unicode-width = "0.2.2"
+url = "2.5.8"
+
+[dev-dependencies]
+assert_cmd = "2.2.2"
+insta = { version = "1.47.2", features = ["yaml", "filters"] }
+predicates = "3.1.4"
+tempfile = "3.27.0"

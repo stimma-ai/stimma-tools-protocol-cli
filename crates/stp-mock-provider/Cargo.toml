@@ -1,0 +1,16 @@
+[package]
+name = "stp-mock-provider"
+description = "Test-fixture STP provider for stp end-to-end tests"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "stp-mock-provider"
+path = "src/main.rs"
+
+[dependencies]
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+tokio = { version = "1.52.3", features = ["rt", "macros", "io-std", "io-util", "time"] }

@@ -1,0 +1,20 @@
+[workspace]
+resolver = "2"
+members = ["crates/stp-client", "crates/stp", "crates/stp-mock-provider"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+authors = ["Stimma"]
+repository = "https://github.com/stimma-ai/stimma-tools-protocol-cli"
+rust-version = "1.85"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
+
+[workspace.lints.clippy]
+all = "warn"
