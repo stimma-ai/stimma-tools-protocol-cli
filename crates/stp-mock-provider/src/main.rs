@@ -141,7 +141,8 @@ async fn main() {
             "stp_version": "1.0",
             "provider_id": "mock",
             "provider_name": "Mock STP Provider",
-            "server": "stp-mock-provider/0.1.0",
+            // Product identity, `Name/Version` per the spec — fixed by the implementation.
+            "server": concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION")),
             "max_concurrent": 2,
             "capabilities": { "cancel": true }
         },

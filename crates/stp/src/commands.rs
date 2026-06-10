@@ -235,6 +235,21 @@ async fn cmd_show(session: &mut Session, ctx: &Ctx, a: ShowArgs) -> Result<()> {
         }
         // `show` — provider info + queue snapshot.
         None => {
+            // Spec: `server` is required and MUST parse as `Name/Version`; hosts still accept
+            // registrations without it and treat the product identity as unknown.
+            match session.provider.server_identity() {
+                Some(_) => {}
+                None => match &session.provider.server {
+                    Some(s) => ctx.note(format!(
+                        "warning: `server` value {s:?} does not parse as `Name/Version`; \
+                         product identity is unknown"
+                    )),
+                    None => ctx.note(
+                        "warning: registration has no `server` field (required as \
+                         `Name/Version`); product identity is unknown",
+                    ),
+                },
+            }
             let value = list_value(session).await?;
             let count = value
                 .get("tools")

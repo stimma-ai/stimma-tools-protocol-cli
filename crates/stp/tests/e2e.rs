@@ -97,7 +97,10 @@ fn show_no_tool_shows_provider() {
         .assert()
         .success()
         .stdout(predicate::str::contains("Mock STP Provider"))
-        .stdout(predicate::str::contains("capabilities"));
+        .stdout(predicate::str::contains("stp-mock-provider/"))
+        .stdout(predicate::str::contains("capabilities"))
+        // The mock sends a compliant `Name/Version` `server`, so no product-identity warning.
+        .stderr(predicate::str::contains("warning:").not());
 }
 
 #[test]

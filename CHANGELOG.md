@@ -6,6 +6,13 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- Registration `server` product-identity validation (spec 1.0-draft5): `stp-client` parses the
+  required `Name/Version` format (`parse_server_field`, `ProviderRegister::server_identity`),
+  and `stp show` warns when `server` is missing or non-parseable — the registration is still
+  accepted and the product identity treated as unknown, per the spec's compatibility clause.
+
 ### Added — Milestone 1
 
 - `stp-client` library: STP wire types, WebSocket + stdio transports, registration/execute
