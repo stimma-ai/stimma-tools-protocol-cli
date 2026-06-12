@@ -153,6 +153,53 @@ fn show_unknown_param_is_usage_error() {
 }
 
 #[test]
+fn show_object_array_param_lists_fields() {
+    // An object[] param shows its item fields and points at the dotted drill-down.
+    stp()
+        .args(["show", "t2i", "loras"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Fields"))
+        .stdout(predicate::str::contains("path"))
+        .stdout(predicate::str::contains("weight"))
+        .stdout(predicate::str::contains("loras.<field>"));
+}
+
+#[test]
+fn show_nested_param_lists_values() {
+    // The enum nested under loras[].path is reachable via a dotted path.
+    stp()
+        .args(["show", "t2i", "loras.path"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Allowed values"))
+        .stdout(predicate::str::contains("loras/a.safetensors"));
+}
+
+#[test]
+fn show_nested_param_json_dumps_field_schema() {
+    let out = stp()
+        .args(["show", "t2i", "loras.weight", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let v: serde_json::Value = serde_json::from_slice(&out).unwrap();
+    assert_eq!(v["maximum"], serde_json::json!(2.0));
+}
+
+#[test]
+fn show_unknown_nested_param_suggests_siblings() {
+    stp()
+        .args(["show", "t2i", "loras.bogus"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("path"))
+        .stderr(predicate::str::contains("weight"));
+}
+
+#[test]
 fn run_writes_output_and_prints_path() {
     let dir = tempfile::tempdir().unwrap();
     let assert = stp()

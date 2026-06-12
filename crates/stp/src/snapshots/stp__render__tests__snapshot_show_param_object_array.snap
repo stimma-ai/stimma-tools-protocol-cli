@@ -1,0 +1,15 @@
+---
+source: crates/stp/src/render.rs
+expression: out
+---
+loras · object[] · optional · default []
+
+LoRAs to apply
+
+Fields
+FIELD   TYPE    DEFAULT
+name    string  —        bigeyes, watercolor, lowpoly
+path *  string  —        loras/bigeyes.safetensors, loras/watercolor.safetensors, loras/lowpoly.safetensors
+weight  number  1.0      -2.0–2.0
+
+See a field's values: stp show flux-klein-9b loras.<field>

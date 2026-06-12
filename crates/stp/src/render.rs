@@ -396,22 +396,95 @@ pub fn show_tool(desc: &ToolDescriptor, pal: &Palette, expand_values: bool) -> S
     out
 }
 
-/// `show <tool> <param>` — one parameter in full. Spells out every allowed value, the numeric
-/// range, item bounds, and any media/ControlNet hints that the parameter table elides. Returns
-/// `None` if the tool has no such parameter (the caller turns that into a usage error).
-pub fn show_param(desc: &ToolDescriptor, name: &str, pal: &Palette) -> Option<String> {
-    let schema = desc
-        .parameter_schema
+/// Step through any array layers to the schema that carries `properties` — the object itself, or
+/// the element type of an `object[]`. Returns the schema unchanged when it has no `items`.
+fn item_schema(schema: &serde_json::Value) -> &serde_json::Value {
+    let mut cur = schema;
+    while cur.get("properties").is_none() {
+        match cur.get("items") {
+            Some(items) => cur = items,
+            None => break,
+        }
+    }
+    cur
+}
+
+/// The field names directly under a container schema (an object, or an `object[]`'s items).
+fn field_names(schema: &serde_json::Value) -> Vec<String> {
+    item_schema(schema)
         .get("properties")
         .and_then(|p| p.as_object())
-        .and_then(|p| p.get(name))?;
+        .map(|m| m.keys().cloned().collect())
+        .unwrap_or_default()
+}
 
-    let required = required_set(desc).iter().any(|r| r == name);
-    let is_media = desc.media_params().into_iter().any(|m| m.name == name);
+/// Whether a schema is something we can drill into — an object or an array of objects.
+fn is_container(schema: &serde_json::Value) -> bool {
+    item_schema(schema).get("properties").is_some()
+}
 
-    // Header: name · type · required/optional · default (when one is declared).
+/// A container's `required` field names (descending into `object[]` items).
+fn required_of(schema: &serde_json::Value) -> Vec<String> {
+    item_schema(schema)
+        .get("required")
+        .and_then(|r| r.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Resolve a dotted parameter path (`loras` or `loras.name`) against a tool's `parameter_schema`,
+/// descending through object `properties` and array `items`. `None` if any segment is absent.
+pub fn resolve_param<'a>(
+    parameter_schema: &'a serde_json::Value,
+    path: &str,
+) -> Option<&'a serde_json::Value> {
+    let mut cur = parameter_schema;
+    for seg in path.split('.') {
+        cur = item_schema(cur).get("properties")?.get(seg)?;
+    }
+    Some(cur)
+}
+
+/// The field names available at the level a (possibly failed) dotted path points into, so a
+/// "no such parameter" error can suggest what *is* there.
+pub fn param_candidates(parameter_schema: &serde_json::Value, path: &str) -> Vec<String> {
+    let parent = match path.rfind('.') {
+        Some(i) => resolve_param(parameter_schema, &path[..i]),
+        None => Some(parameter_schema),
+    };
+    parent
+        .map(field_names)
+        .filter(|f| !f.is_empty())
+        .unwrap_or_else(|| field_names(parameter_schema))
+}
+
+/// `show <tool> <param>` — one parameter in full. For a scalar it spells out every allowed value,
+/// the numeric range, item bounds, and media/ControlNet hints the table elides. For an object or
+/// `object[]` it lists the item's fields, each drillable in turn via a dotted `<param>.<field>`
+/// path. `None` if the tool has no such parameter (the caller turns that into a usage error).
+pub fn show_param(desc: &ToolDescriptor, path: &str, pal: &Palette) -> Option<String> {
+    let schema = resolve_param(&desc.parameter_schema, path)?;
+
+    // `required`/media are relative to the field's immediate parent container.
+    let (parent_path, leaf) = match path.rfind('.') {
+        Some(i) => (&path[..i], &path[i + 1..]),
+        None => ("", path),
+    };
+    let parent = if parent_path.is_empty() {
+        &desc.parameter_schema
+    } else {
+        resolve_param(&desc.parameter_schema, parent_path)?
+    };
+    let required = required_of(parent).iter().any(|r| r == leaf);
+    let is_media = !path.contains('.') && desc.media_params().into_iter().any(|m| m.name == path);
+
+    // Header: path · type · required/optional · default (when one is declared).
     let mut bits = vec![
-        pal.accent(name),
+        pal.accent(path),
         pal.dim(&type_label(schema)),
         pal.dim(if required { "required" } else { "optional" }),
     ];
@@ -431,7 +504,54 @@ pub fn show_param(desc: &ToolDescriptor, name: &str, pal: &Palette) -> Option<St
         let _ = writeln!(out, "\n{d}");
     }
 
-    // Constraints the table can only summarize, each spelled out in full.
+    // An object / object[] parameter: list the item's fields. Each is itself drillable, so the
+    // enums nested under them (e.g. a 2000-entry `loras.name`) are one `<param>.<field>` away.
+    if is_container(schema) {
+        let item = item_schema(schema);
+        let req = required_of(schema);
+        let mut rows: Vec<Vec<Cell>> = Vec::new();
+        if let Some(props) = item.get("properties").and_then(|p| p.as_object()) {
+            for (fname, fschema) in props {
+                let r = req.iter().any(|x| x == fname);
+                let name_plain = if r {
+                    format!("{fname} *")
+                } else {
+                    fname.clone()
+                };
+                let name_styled = if r {
+                    format!("{}{}", pal.accent(fname), pal.warn(" *"))
+                } else {
+                    pal.accent(fname)
+                };
+                let ty = type_label(fschema);
+                let def = default_label(fschema);
+                let note = param_notes(fschema);
+                rows.push(vec![
+                    cell(name_plain, name_styled),
+                    cell(&ty, pal.dim(&ty)),
+                    cell(&def, pal.dim(&def)),
+                    cell(&note, pal.dim(&note)),
+                ]);
+            }
+        }
+        let _ = writeln!(out, "\n{}", pal.dim("Fields"));
+        let _ = writeln!(
+            out,
+            "{}",
+            columns(&["FIELD", "TYPE", "DEFAULT", ""], &rows, pal)
+        );
+        let _ = write!(
+            out,
+            "{}",
+            pal.dim(&format!(
+                "\nSee a field's values: stp show {} {}.<field>",
+                desc.id, path
+            ))
+        );
+        return Some(out.trim_end().to_string());
+    }
+
+    // A scalar parameter: spell out the constraints the table can only summarize.
     let mut cons = String::new();
     if let Some(vals) = enum_values(schema) {
         let default = schema.get("default").and_then(|d| d.as_str());
@@ -572,6 +692,35 @@ mod tests {
         .unwrap()
     }
 
+    /// A tool whose `loras` parameter is an `object[]` with a nested enum — the shape that
+    /// motivated dotted-path drill-down (the allowed values live under `loras.name`).
+    fn lora_tool() -> ToolDescriptor {
+        serde_json::from_value(json!({
+            "id": "flux-klein-9b",
+            "name": "Flux.2 Klein 9B",
+            "task_types": ["text-to-image"],
+            "parameter_schema": {
+                "type": "object", "required": ["prompt"],
+                "properties": {
+                    "prompt": {"type": "string", "description": "Describe the image"},
+                    "loras": {"type": "array", "default": [], "description": "LoRAs to apply",
+                        "items": {"type": "object", "required": ["path"], "properties": {
+                            "name": {"type": "string",
+                                     "enum": ["bigeyes", "watercolor", "lowpoly"]},
+                            "path": {"type": "string",
+                                     "enum": ["loras/bigeyes.safetensors",
+                                              "loras/watercolor.safetensors",
+                                              "loras/lowpoly.safetensors"]},
+                            "weight": {"type": "number", "minimum": -2.0, "maximum": 2.0,
+                                       "default": 1.0}
+                        }}}
+                }
+            },
+            "output_schema": {"type": "object", "properties": {"assets": {"type": "array"}}}
+        }))
+        .unwrap()
+    }
+
     #[test]
     fn snapshot_tools_table() {
         let edit: ToolDescriptor = serde_json::from_value(json!({
@@ -611,6 +760,48 @@ mod tests {
     #[test]
     fn show_param_unknown_is_none() {
         assert!(show_param(&t2i(), "nope", &Palette::new(false)).is_none());
+    }
+
+    #[test]
+    fn snapshot_show_param_object_array() {
+        // `show <tool> loras` lists the item fields and points at the dotted drill-down.
+        let out = show_param(&lora_tool(), "loras", &Palette::new(false)).unwrap();
+        insta::assert_snapshot!(out);
+    }
+
+    #[test]
+    fn snapshot_show_param_nested_enum() {
+        // `show <tool> loras.name` reaches the enum nested under the array's item object.
+        let out = show_param(&lora_tool(), "loras.name", &Palette::new(false)).unwrap();
+        insta::assert_snapshot!(out);
+    }
+
+    #[test]
+    fn resolve_param_walks_dotted_paths() {
+        let t = lora_tool();
+        let s = &t.parameter_schema;
+        assert!(resolve_param(s, "loras").is_some());
+        assert_eq!(
+            resolve_param(s, "loras.weight")
+                .and_then(|w| w.get("maximum"))
+                .and_then(|m| m.as_f64()),
+            Some(2.0)
+        );
+        // `weight` is a scalar — can't descend further, and a bogus field is absent.
+        assert!(resolve_param(s, "loras.weight.nope").is_none());
+        assert!(resolve_param(s, "loras.bogus").is_none());
+    }
+
+    #[test]
+    fn param_candidates_suggests_sibling_fields() {
+        let t = lora_tool();
+        let mut got = param_candidates(&t.parameter_schema, "loras.bogus");
+        got.sort();
+        assert_eq!(got, vec!["name", "path", "weight"]);
+        // A bad top-level name falls back to the tool's parameters.
+        let mut top = param_candidates(&t.parameter_schema, "nope");
+        top.sort();
+        assert_eq!(top, vec!["loras", "prompt"]);
     }
 
     #[test]

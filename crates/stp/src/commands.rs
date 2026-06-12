@@ -221,32 +221,25 @@ async fn cmd_show(session: &mut Session, ctx: &Ctx, a: ShowArgs) -> Result<()> {
     let pal = render::Palette::new(ctx.color);
     match a.tool {
         // `show <tool> <param>` — one parameter in full (allowed values, range, constraints).
+        // `<param>` may be a dotted path into object / object[] fields, e.g. `loras.name`.
         Some(tool) if a.param.is_some() => {
             let param = a.param.unwrap();
             let (_, desc) = find_descriptor(session, &tool).await?;
-            let schema = desc
-                .parameter_schema
-                .get("properties")
-                .and_then(|p| p.as_object());
-            match schema.and_then(|p| p.get(&param)) {
+            match render::resolve_param(&desc.parameter_schema, &param) {
                 None => {
-                    let names: Vec<&str> = schema
-                        .into_iter()
-                        .flatten()
-                        .map(|(n, _)| n.as_str())
-                        .collect();
+                    let cands = render::param_candidates(&desc.parameter_schema, &param);
                     return Err(StpError::usage(format!(
-                        "tool {tool:?} has no parameter {param:?} (parameters: {})",
-                        if names.is_empty() {
+                        "tool {tool:?} has no parameter {param:?} (available: {})",
+                        if cands.is_empty() {
                             "none".to_string()
                         } else {
-                            names.join(", ")
+                            cands.join(", ")
                         }
                     )));
                 }
                 Some(prop) if a.json => println!("{}", serde_json::to_string_pretty(prop)?),
                 Some(_) => {
-                    // Renderer re-resolves the property; it can't be missing after the check above.
+                    // Renderer re-resolves the path; it can't be missing after the check above.
                     if let Some(text) = render::show_param(&desc, &param, &pal) {
                         println!("{text}");
                     }

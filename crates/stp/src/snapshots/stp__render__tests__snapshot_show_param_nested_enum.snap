@@ -1,0 +1,10 @@
+---
+source: crates/stp/src/render.rs
+expression: out
+---
+loras.name · string · optional
+
+Allowed values (3):
+  • bigeyes
+  • watercolor
+  • lowpoly

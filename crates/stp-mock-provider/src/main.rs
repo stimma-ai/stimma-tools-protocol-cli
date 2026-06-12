@@ -43,7 +43,16 @@ fn descriptors() -> Value {
                         "seed":   { "type": "integer", "x-control": "seed" },
                         "sampler":{ "type": "string", "default": "euler",
                                     "enum": ["euler", "heun", "dpmpp_2m", "ddim", "lcm"],
-                                    "x-control": "dropdown" }
+                                    "x-control": "dropdown" },
+                        "loras":  { "type": "array", "default": [],
+                                    "description": "LoRAs to apply",
+                                    "items": { "type": "object", "required": ["path"],
+                                        "properties": {
+                                            "path":   { "type": "string",
+                                                        "enum": ["loras/a.safetensors",
+                                                                 "loras/b.safetensors"] },
+                                            "weight": { "type": "number", "minimum": -2.0,
+                                                        "maximum": 2.0, "default": 1.0 } } } }
                     }
                 },
                 "output_schema": {
