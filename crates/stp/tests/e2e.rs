@@ -109,6 +109,50 @@ fn show_unknown_tool_is_usage_error() {
 }
 
 #[test]
+fn show_param_lists_allowed_values() {
+    // `show <tool> <param>` spells out the full enum, not the table's collapsed count.
+    stp()
+        .args(["show", "t2i", "sampler"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Allowed values"))
+        .stdout(predicate::str::contains("dpmpp_2m"))
+        .stdout(predicate::str::contains("lcm"));
+}
+
+#[test]
+fn show_param_json_dumps_property_schema() {
+    let out = stp()
+        .args(["show", "t2i", "sampler", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let v: serde_json::Value = serde_json::from_slice(&out).unwrap();
+    assert_eq!(v["enum"][0], serde_json::json!("euler"));
+}
+
+#[test]
+fn show_values_expands_enums() {
+    stp()
+        .args(["show", "t2i", "--values"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Allowed values"))
+        .stdout(predicate::str::contains("euler, heun, dpmpp_2m, ddim, lcm"));
+}
+
+#[test]
+fn show_unknown_param_is_usage_error() {
+    stp()
+        .args(["show", "t2i", "nope"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("no parameter"));
+}
+
+#[test]
 fn run_writes_output_and_prints_path() {
     let dir = tempfile::tempdir().unwrap();
     let assert = stp()

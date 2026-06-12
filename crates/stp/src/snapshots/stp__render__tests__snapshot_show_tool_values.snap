@@ -1,0 +1,22 @@
+---
+source: crates/stp/src/render.rs
+expression: out
+---
+Flux.2 Klein 9B   (flux-klein-9b)
+text-to-image, image-to-image
+Open Weights · Fast
+
+PARAMETER     TYPE      DEFAULT
+input_images  string[]  —        0–10 items · file path or URL
+prompt *      string    ""       Describe the image
+sampler       string    "euler"  5 options
+seed          integer   random
+width         integer   1024     256–2048
+
+Allowed values
+  sampler  euler, heun, dpmpp_2m, ddim, lcm
+
+Layout
+  Advanced (collapsed): seed, sampler
+
+Output roles: primary

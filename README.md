@@ -54,6 +54,7 @@ flag:
 
 ```sh
 stp --url ws://localhost:8188/stp-v1 show flux
+stp --url ws://localhost:8188/stp-v1 show flux sampler   # one parameter's allowed values
 stp --url ws://localhost:8188/stp-v1 run flux "a low-poly fox at dusk" --steps 30
 ```
 
@@ -78,9 +79,8 @@ by reference with `--token-env` or `--token-command` so the secret stays out of 
 | Command | Purpose |
 |---------|---------|
 | `tools` (`ls`) | List the provider's tools (`--json`, `--format=tsv`, `--task <t>`). |
-| `schema <tool>` | Show parameters; `--json` / `--schema-only` / `--output-schema` to dump. |
+| `show [tool] [param]` | No args: provider info + queue. `<tool>`: parameter table (`--values` expands enums; `--schema-only` / `--output-schema` / `--json` dump). `<tool> <param>`: one parameter's allowed values & constraints (`--json` dumps its schema). |
 | `run <tool> [prompt]` | Execute: `--<param>` flags, `--params @file`, `-o`, `--stdout`, `--dry-run`, `--json`. |
-| `info` | Provider registration info + queue status. |
 | `raw <method> [json\|@file\|-]` | Send one arbitrary JSON-RPC request. |
 | `watch` | Stream provider notifications until interrupted. |
 | `config …` | `list`/`add`/`remove`/`set-default`/`get`/`init`/`path`/`edit`. |

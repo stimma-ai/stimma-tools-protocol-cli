@@ -8,6 +8,10 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- `stp show <tool> <param>` drills into one parameter, listing its full allowed values plus
+  range, item bounds, and media/ControlNet hints that the parameter table elides; `--json`
+  on that form dumps the single property's schema. `stp show <tool> --values` spells out every
+  parameter's full enum in a trailing section instead of collapsing long ones to `(N options)`.
 - Registration `server` product-identity validation (spec 1.0-draft5): `stp-client` parses the
   required `Name/Version` format (`parse_server_field`, `ProviderRegister::server_identity`),
   and `stp show` warns when `server` is missing or non-parseable — the registration is still

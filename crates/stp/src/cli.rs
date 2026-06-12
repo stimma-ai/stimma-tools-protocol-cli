@@ -76,7 +76,7 @@ pub enum Command {
     /// List the provider's tools.
     #[command(alias = "ls")]
     Tools(ToolsArgs),
-    /// Show the provider (no tool) or a tool's parameters.
+    /// Show the provider (no tool), a tool's parameters, or one parameter's detail.
     Show(ShowArgs),
     /// Execute a tool, transfer assets, write outputs.
     Run(RunArgs),
@@ -112,7 +112,11 @@ pub struct ToolsArgs {
 pub struct ShowArgs {
     /// Tool id. Omit to show the provider's info and queue status.
     pub tool: Option<String>,
-    /// Dump as JSON (the raw descriptor for a tool, or provider info with no tool).
+    /// Parameter name. With a tool, show just this parameter in full — allowed
+    /// values, range, and other constraints — instead of the parameter table.
+    pub param: Option<String>,
+    /// Dump as JSON: the raw descriptor for a tool, the parameter's schema with a
+    /// param, or provider info with no tool.
     #[arg(long)]
     pub json: bool,
     /// Dump only the parameter_schema (with a tool).
@@ -121,6 +125,10 @@ pub struct ShowArgs {
     /// Dump only the output_schema (with a tool).
     #[arg(long = "output-schema")]
     pub output_schema: bool,
+    /// List every parameter's full allowed values instead of collapsing long
+    /// enums to a count (with a tool, no param).
+    #[arg(long)]
+    pub values: bool,
 }
 
 #[derive(Args)]

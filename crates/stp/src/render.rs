@@ -195,6 +195,19 @@ fn constraint_tag(schema: &serde_json::Value) -> Option<String> {
     None
 }
 
+/// A parameter's `enum` members as display strings — string members verbatim, anything else
+/// (numeric/boolean enums) as its compact JSON form. `None` when the schema declares no `enum`.
+fn enum_values(schema: &serde_json::Value) -> Option<Vec<String>> {
+    schema.get("enum").and_then(|e| e.as_array()).map(|arr| {
+        arr.iter()
+            .map(|v| match v {
+                serde_json::Value::String(s) => s.clone(),
+                other => other.to_string(),
+            })
+            .collect()
+    })
+}
+
 /// Item-count constraint, phrased the way a person reads it: a fixed count is `exactly N`, an
 /// open bound is `≥N` / `≤N`, and the noun agrees in number (`1 item`, `2 items`).
 fn items_tag(lo: Option<u64>, hi: Option<u64>) -> String {
@@ -275,7 +288,9 @@ fn elide(s: &str, max: usize) -> String {
 
 /// `show <tool>` — a narrow aligned name/type/default table, with a dim detail line under each
 /// parameter so the columns stay tight even for tools with long enums or controlnet lists.
-pub fn show_tool(desc: &ToolDescriptor, pal: &Palette) -> String {
+/// With `expand_values`, a trailing section lists every enum parameter's full value set (what
+/// `--values` is for); otherwise long enums stay collapsed to a count in the note column.
+pub fn show_tool(desc: &ToolDescriptor, pal: &Palette, expand_values: bool) -> String {
     let mut out = String::new();
     let _ = writeln!(
         out,
@@ -342,6 +357,31 @@ pub fn show_tool(desc: &ToolDescriptor, pal: &Palette) -> String {
         columns(&["PARAMETER", "TYPE", "DEFAULT", ""], &rows, pal)
     );
 
+    // `--values`: the note column collapses long enums to `(N options)`; here we spell every
+    // one out in full, in an aligned trailing section that mirrors `Layout` / `Output roles`.
+    if expand_values {
+        let enums: Vec<(&String, Vec<String>)> = desc
+            .parameter_schema
+            .get("properties")
+            .and_then(|p| p.as_object())
+            .into_iter()
+            .flatten()
+            .filter_map(|(name, schema)| {
+                enum_values(schema)
+                    .filter(|v| !v.is_empty())
+                    .map(|v| (name, v))
+            })
+            .collect();
+        if !enums.is_empty() {
+            let _ = writeln!(out, "\n{}", pal.dim("Allowed values"));
+            let w = enums.iter().map(|(n, _)| disp(n)).max().unwrap_or(0);
+            for (name, vals) in &enums {
+                let pad = " ".repeat(w.saturating_sub(disp(name)) + 2);
+                let _ = writeln!(out, "  {}{}{}", pal.accent(name), pad, vals.join(", "));
+            }
+        }
+    }
+
     if !desc.layout.is_empty() {
         let _ = writeln!(out, "\n{}", pal.dim("Layout"));
         for sec in &desc.layout {
@@ -354,6 +394,95 @@ pub fn show_tool(desc: &ToolDescriptor, pal: &Palette) -> String {
     let roles = desc.output_roles();
     let _ = write!(out, "\n{} {}", pal.dim("Output roles:"), roles.join(", "));
     out
+}
+
+/// `show <tool> <param>` — one parameter in full. Spells out every allowed value, the numeric
+/// range, item bounds, and any media/ControlNet hints that the parameter table elides. Returns
+/// `None` if the tool has no such parameter (the caller turns that into a usage error).
+pub fn show_param(desc: &ToolDescriptor, name: &str, pal: &Palette) -> Option<String> {
+    let schema = desc
+        .parameter_schema
+        .get("properties")
+        .and_then(|p| p.as_object())
+        .and_then(|p| p.get(name))?;
+
+    let required = required_set(desc).iter().any(|r| r == name);
+    let is_media = desc.media_params().into_iter().any(|m| m.name == name);
+
+    // Header: name · type · required/optional · default (when one is declared).
+    let mut bits = vec![
+        pal.accent(name),
+        pal.dim(&type_label(schema)),
+        pal.dim(if required { "required" } else { "optional" }),
+    ];
+    let has_default = schema.get("default").is_some()
+        || schema.get("x-control").and_then(|c| c.as_str()) == Some("seed");
+    if has_default {
+        bits.push(pal.dim(&format!("default {}", default_label(schema))));
+    }
+    let mut out = String::new();
+    let _ = writeln!(out, "{}", bits.join(&pal.dim(" \u{b7} ")));
+
+    if let Some(d) = schema
+        .get("description")
+        .and_then(|d| d.as_str())
+        .filter(|d| !d.is_empty())
+    {
+        let _ = writeln!(out, "\n{d}");
+    }
+
+    // Constraints the table can only summarize, each spelled out in full.
+    let mut cons = String::new();
+    if let Some(vals) = enum_values(schema) {
+        let default = schema.get("default").and_then(|d| d.as_str());
+        let _ = writeln!(
+            cons,
+            "{}",
+            pal.dim(&format!("Allowed values ({}):", vals.len()))
+        );
+        for v in &vals {
+            let tail = if Some(v.as_str()) == default {
+                format!("  {}", pal.dim("(default)"))
+            } else {
+                String::new()
+            };
+            let _ = writeln!(cons, "  {} {}{}", pal.dim("\u{2022}"), v, tail);
+        }
+    }
+    if let (Some(mn), Some(mx)) = (schema.get("minimum"), schema.get("maximum")) {
+        match schema.get("x-step").or_else(|| schema.get("multipleOf")) {
+            Some(step) => {
+                let _ = writeln!(cons, "Range: {mn}\u{2013}{mx} (step {step})");
+            }
+            None => {
+                let _ = writeln!(cons, "Range: {mn}\u{2013}{mx}");
+            }
+        }
+    }
+    let lo = schema
+        .get("minItems")
+        .or_else(|| schema.get("x-min-items"))
+        .and_then(|v| v.as_u64());
+    let hi = schema
+        .get("maxItems")
+        .or_else(|| schema.get("x-max-items"))
+        .and_then(|v| v.as_u64());
+    if lo.is_some() || hi.is_some() {
+        let _ = writeln!(cons, "{}", items_tag(lo, hi));
+    }
+    if let Some(cn) = schema.get("x-controlnet").and_then(|c| c.as_array()) {
+        let names: Vec<&str> = cn.iter().filter_map(|v| v.as_str()).collect();
+        if !names.is_empty() {
+            let _ = writeln!(cons, "ControlNet hints: {}", names.join(", "));
+        }
+    }
+    if is_media {
+        let _ = writeln!(cons, "Accepts: file path or URL");
+    }
+    if !cons.is_empty() {
+        let _ = writeln!(out, "\n{}", cons.trim_end());
+    }
+    Some(out.trim_end().to_string())
 }
 
 /// `show` (no tool) — provider snapshot. Keys dimmed, the provider name bold.
@@ -456,8 +585,32 @@ mod tests {
 
     #[test]
     fn snapshot_show_tool() {
-        let out = show_tool(&t2i(), &Palette::new(false));
+        let out = show_tool(&t2i(), &Palette::new(false), false);
         insta::assert_snapshot!(out);
+    }
+
+    #[test]
+    fn snapshot_show_tool_values() {
+        // `--values` spells out the sampler enum the note column would otherwise collapse.
+        let out = show_tool(&t2i(), &Palette::new(false), true);
+        insta::assert_snapshot!(out);
+    }
+
+    #[test]
+    fn snapshot_show_param_enum() {
+        let out = show_param(&t2i(), "sampler", &Palette::new(false)).unwrap();
+        insta::assert_snapshot!(out);
+    }
+
+    #[test]
+    fn snapshot_show_param_numeric() {
+        let out = show_param(&t2i(), "width", &Palette::new(false)).unwrap();
+        insta::assert_snapshot!(out);
+    }
+
+    #[test]
+    fn show_param_unknown_is_none() {
+        assert!(show_param(&t2i(), "nope", &Palette::new(false)).is_none());
     }
 
     #[test]
@@ -471,7 +624,10 @@ mod tests {
         // At most MAX_DEFAULT_WIDTH content chars + ellipsis + two quotes.
         assert!(label.chars().count() <= MAX_DEFAULT_WIDTH + 3, "{label}");
         // Short defaults are untouched.
-        assert_eq!(default_label(&json!({"type":"string","default":"euler"})), "\"euler\"");
+        assert_eq!(
+            default_label(&json!({"type":"string","default":"euler"})),
+            "\"euler\""
+        );
     }
 
     #[test]

@@ -220,6 +220,39 @@ async fn find_descriptor(session: &mut Session, tool: &str) -> Result<(Value, To
 async fn cmd_show(session: &mut Session, ctx: &Ctx, a: ShowArgs) -> Result<()> {
     let pal = render::Palette::new(ctx.color);
     match a.tool {
+        // `show <tool> <param>` — one parameter in full (allowed values, range, constraints).
+        Some(tool) if a.param.is_some() => {
+            let param = a.param.unwrap();
+            let (_, desc) = find_descriptor(session, &tool).await?;
+            let schema = desc
+                .parameter_schema
+                .get("properties")
+                .and_then(|p| p.as_object());
+            match schema.and_then(|p| p.get(&param)) {
+                None => {
+                    let names: Vec<&str> = schema
+                        .into_iter()
+                        .flatten()
+                        .map(|(n, _)| n.as_str())
+                        .collect();
+                    return Err(StpError::usage(format!(
+                        "tool {tool:?} has no parameter {param:?} (parameters: {})",
+                        if names.is_empty() {
+                            "none".to_string()
+                        } else {
+                            names.join(", ")
+                        }
+                    )));
+                }
+                Some(prop) if a.json => println!("{}", serde_json::to_string_pretty(prop)?),
+                Some(_) => {
+                    // Renderer re-resolves the property; it can't be missing after the check above.
+                    if let Some(text) = render::show_param(&desc, &param, &pal) {
+                        println!("{text}");
+                    }
+                }
+            }
+        }
         // `show <tool>` — tool detail or schema dump.
         Some(tool) => {
             let (raw, desc) = find_descriptor(session, &tool).await?;
@@ -230,7 +263,7 @@ async fn cmd_show(session: &mut Session, ctx: &Ctx, a: ShowArgs) -> Result<()> {
             } else if a.output_schema {
                 println!("{}", serde_json::to_string_pretty(&desc.output_schema)?);
             } else {
-                println!("{}", render::show_tool(&desc, &pal));
+                println!("{}", render::show_tool(&desc, &pal, a.values));
             }
         }
         // `show` — provider info + queue snapshot.

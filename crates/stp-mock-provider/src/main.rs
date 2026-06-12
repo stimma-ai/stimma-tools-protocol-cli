@@ -42,7 +42,7 @@ fn descriptors() -> Value {
                                     "default": 4, "x-control": "slider", "x-step": 1 },
                         "seed":   { "type": "integer", "x-control": "seed" },
                         "sampler":{ "type": "string", "default": "euler",
-                                    "enum": ["euler", "heun", "dpmpp_2m"],
+                                    "enum": ["euler", "heun", "dpmpp_2m", "ddim", "lcm"],
                                     "x-control": "dropdown" }
                     }
                 },

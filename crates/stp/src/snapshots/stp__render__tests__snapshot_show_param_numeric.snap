@@ -1,0 +1,7 @@
+---
+source: crates/stp/src/render.rs
+expression: out
+---
+width · integer · optional · default 1024
+
+Range: 256–2048 (step 64)

@@ -1,0 +1,12 @@
+---
+source: crates/stp/src/render.rs
+expression: out
+---
+sampler · string · optional · default "euler"
+
+Allowed values (5):
+  • euler  (default)
+  • heun
+  • dpmpp_2m
+  • ddim
+  • lcm
