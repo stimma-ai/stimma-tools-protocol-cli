@@ -335,25 +335,22 @@ mod tests {
             parsed("ComfyUI-Stimma/1.2.0-beta1"),
             Some(("ComfyUI-Stimma".into(), "1.2.0-beta1".into()))
         );
-        assert_eq!(
-            parsed("X/0.9-rc.2"),
-            Some(("X".into(), "0.9-rc.2".into()))
-        );
+        assert_eq!(parsed("X/0.9-rc.2"), Some(("X".into(), "0.9-rc.2".into())));
     }
 
     #[test]
     fn server_field_garbage() {
         for bad in [
             "",
-            "ComfyUI-Stimma",        // no slash
-            "/1.2.3",                // empty name
-            "ComfyUI-Stimma/",       // empty version
-            "Comfy UI/1.2.3",        // whitespace in name
-            "a/b/1.2.3",             // extra slash
-            "Tool/v1.2.3",           // non-numeric version
-            "Tool/1..2",             // empty dot segment
-            "Tool/1.2.3-",           // empty suffix
-            "Tool/1.2.3-beta 1",     // whitespace in suffix
+            "ComfyUI-Stimma",         // no slash
+            "/1.2.3",                 // empty name
+            "ComfyUI-Stimma/",        // empty version
+            "Comfy UI/1.2.3",         // whitespace in name
+            "a/b/1.2.3",              // extra slash
+            "Tool/v1.2.3",            // non-numeric version
+            "Tool/1..2",              // empty dot segment
+            "Tool/1.2.3-",            // empty suffix
+            "Tool/1.2.3-beta 1",      // whitespace in suffix
             "Mozilla/5.0 (like STP)", // trailing junk
         ] {
             assert_eq!(parsed(bad), None, "expected {bad:?} to be rejected");
@@ -362,8 +359,7 @@ mod tests {
 
     #[test]
     fn server_identity_absent_is_none() {
-        let reg: ProviderRegister =
-            serde_json::from_value(json!({ "provider_id": "p" })).unwrap();
+        let reg: ProviderRegister = serde_json::from_value(json!({ "provider_id": "p" })).unwrap();
         assert!(reg.server.is_none());
         assert!(reg.server_identity().is_none());
     }
