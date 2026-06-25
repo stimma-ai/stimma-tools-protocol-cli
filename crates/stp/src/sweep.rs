@@ -91,10 +91,15 @@ fn expected_output_kind(desc: &ToolDescriptor) -> Kind {
 }
 
 /// Map a media `x-control` to the fixture kind it consumes.
+///
+/// `video_frame_picker` is an *image* input — a single still frame decoded by an image node
+/// (e.g. an i2v start frame) — even though the UI lets the user pick that frame from a video.
+/// Only `video_picker` consumes a whole video container. Feeding a video container to a frame
+/// picker makes the image node fail to decode it.
 fn media_input_kind(control: &str) -> Kind {
     match control {
-        "video_picker" | "video_frame_picker" => Kind::Video,
-        _ => Kind::Image, // image_picker, mask_editor
+        "video_picker" => Kind::Video,
+        _ => Kind::Image, // image_picker, video_frame_picker (still frame), mask_editor
     }
 }
 
@@ -1262,6 +1267,16 @@ mod tests {
             expected_output_kind(&desc(json!({}), &["text-to-speech"])),
             Kind::Audio
         );
+    }
+
+    #[test]
+    fn media_input_kind_mapping() {
+        // A frame picker takes a still image (decoded by an image node), not a video container.
+        assert_eq!(media_input_kind("video_frame_picker"), Kind::Image);
+        assert_eq!(media_input_kind("image_picker"), Kind::Image);
+        assert_eq!(media_input_kind("mask_editor"), Kind::Image);
+        // Only an explicit video picker consumes a whole video.
+        assert_eq!(media_input_kind("video_picker"), Kind::Video);
     }
 
     #[test]
