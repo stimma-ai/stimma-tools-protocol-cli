@@ -365,10 +365,9 @@ async fn sweep_one(
 
     // Validate the built request before spending uploads/compute. A failure here is our
     // builder falling short of the schema — surface it as a FAIL so it's visible.
-    if let Err(e) = stp_client::schema::validate(
-        &desc.parameter_schema,
-        &Value::Object(params.clone()),
-    ) {
+    if let Err(e) =
+        stp_client::schema::validate(&desc.parameter_schema, &Value::Object(params.clone()))
+    {
         return Ok(report_fail(
             desc,
             task,
@@ -408,7 +407,7 @@ async fn sweep_one(
             &params,
         )),
         RunOutcome::Failed(je) => {
-            if is_missing_resource(&je) {
+            if is_missing_resource(&je, desc) {
                 Ok(ToolReport {
                     id: desc.id.clone(),
                     task,
@@ -581,7 +580,12 @@ async fn validate_output(
     };
     let bytes = match session.asset_store.get(&asset.asset_id).await {
         Ok(b) => b,
-        Err(e) => return Ok(mk_fail(format!("could not fetch output: {}", one_line(&e.to_string())))),
+        Err(e) => {
+            return Ok(mk_fail(format!(
+                "could not fetch output: {}",
+                one_line(&e.to_string())
+            )))
+        }
     };
     if bytes.is_empty() {
         return Ok(mk_fail("output asset is empty".into()));
@@ -713,11 +717,7 @@ fn jpeg_dimensions(b: &[u8]) -> Option<(u32, u32)> {
         }
         let marker = b[i + 1];
         // SOF0..SOF15, excluding DHT(C4), JPG(C8), DAC(CC).
-        if (0xC0..=0xCF).contains(&marker)
-            && marker != 0xC4
-            && marker != 0xC8
-            && marker != 0xCC
-        {
+        if (0xC0..=0xCF).contains(&marker) && marker != 0xC4 && marker != 0xC8 && marker != 0xCC {
             let h = u16::from_be_bytes([b[i + 5], b[i + 6]]) as u32;
             let w = u16::from_be_bytes([b[i + 7], b[i + 8]]) as u32;
             return Some((w, h));
@@ -768,15 +768,12 @@ fn min_value(prop: &Value) -> Option<Value> {
     // Enumerated numeric choices → the smallest.
     for key in ["x-allowed-values", "enum"] {
         if let Some(arr) = prop.get(key).and_then(|v| v.as_array()) {
-            let min = arr
-                .iter()
-                .filter(|v| v.as_f64().is_some())
-                .min_by(|a, b| {
-                    a.as_f64()
-                        .unwrap()
-                        .partial_cmp(&b.as_f64().unwrap())
-                        .unwrap()
-                });
+            let min = arr.iter().filter(|v| v.as_f64().is_some()).min_by(|a, b| {
+                a.as_f64()
+                    .unwrap()
+                    .partial_cmp(&b.as_f64().unwrap())
+                    .unwrap()
+            });
             if let Some(v) = min {
                 return Some(v.clone());
             }
@@ -823,8 +820,19 @@ fn job_err_msg(je: &JobError) -> String {
 
 /// Heuristic: does a job error look like a missing model/file rather than a real bug? Such
 /// tools are SKIPped (the provider simply doesn't have that resource installed).
-fn is_missing_resource(je: &JobError) -> bool {
+///
+/// "Value not in list" is ambiguous: a COMBO value was rejected. For a model/checkpoint
+/// option that means the model isn't installed → SKIP. For a *media-input* param it means our
+/// uploaded asset wasn't registered where the node could see it — a real wiring bug → FAIL.
+/// We disambiguate by whether the error points at one of this tool's media inputs, so broken
+/// image/video input is reported instead of hiding as a SKIP.
+fn is_missing_resource(je: &JobError, desc: &ToolDescriptor) -> bool {
     let hay = format!("{} {}", je.code, je.message).to_lowercase();
+
+    if is_value_not_in_list(&hay) && rejects_media_input(&hay, desc) {
+        return false; // media input rejected → real failure, not a missing resource
+    }
+
     const NEEDLES: &[&str] = &[
         "not in list",
         "value not in",
@@ -841,6 +849,45 @@ fn is_missing_resource(je: &JobError) -> bool {
         "no options",
     ];
     NEEDLES.iter().any(|n| hay.contains(n))
+}
+
+/// A rejected-COMBO ("value not in list") family error.
+fn is_value_not_in_list(hay: &str) -> bool {
+    ["not in list", "value not in", "is not in"]
+        .iter()
+        .any(|n| hay.contains(n))
+}
+
+/// Whether a "value not in list" error references one of `desc`'s media-input params (vs. a
+/// model/checkpoint option). ComfyUI embeds the offending node's class (e.g. `StimmaVideoParam`)
+/// and/or param name in the message; we match on the media kind in a param/picker/upload context
+/// and on the schema param name. The kind word is only matched in such a context so a bare
+/// "image"/"video" in an unrelated model error doesn't trigger a false FAIL.
+fn rejects_media_input(hay: &str, desc: &ToolDescriptor) -> bool {
+    for m in desc.media_params() {
+        // The schema param name itself (e.g. "input_videos").
+        if hay.contains(&m.name.to_lowercase()) {
+            return true;
+        }
+        let kind = desc
+            .property(&m.name)
+            .and_then(|p| p.get("x-control"))
+            .and_then(|c| c.as_str())
+            .map(media_input_kind)
+            .unwrap_or(Kind::Image);
+        let label = kind.label();
+        for needle in [
+            format!("{label}param"),
+            format!("{label} param"),
+            format!("{label}_picker"),
+            format!("{label} input"),
+        ] {
+            if hay.contains(&needle) {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 // ---- fixtures ---------------------------------------------------------------
@@ -896,8 +943,10 @@ impl<'a> Fixtures<'a> {
             if path.is_file() {
                 return Some(path);
             }
-            self.ctx
-                .note(format!("warning: --fixture-{} {p:?} not found", kind.label()));
+            self.ctx.note(format!(
+                "warning: --fixture-{} {p:?} not found",
+                kind.label()
+            ));
             return None;
         }
 
@@ -925,11 +974,14 @@ impl<'a> Fixtures<'a> {
                     }
                     Err(e) => self.ctx.note(format!("warning: bad fixture manifest: {e}")),
                 },
-                Err(e) => self.ctx.note(format!("warning: reading fixture manifest: {e}")),
+                Err(e) => self
+                    .ctx
+                    .note(format!("warning: reading fixture manifest: {e}")),
             },
-            Ok(resp) => self
-                .ctx
-                .note(format!("warning: fixture manifest {url} → HTTP {}", resp.status())),
+            Ok(resp) => self.ctx.note(format!(
+                "warning: fixture manifest {url} → HTTP {}",
+                resp.status()
+            )),
             Err(e) => self
                 .ctx
                 .note(format!("warning: no fixture manifest ({url}): {e}")),
@@ -971,7 +1023,8 @@ impl<'a> Fixtures<'a> {
                 return None;
             }
             Err(e) => {
-                self.ctx.note(format!("warning: fetching fixture {url}: {e}"));
+                self.ctx
+                    .note(format!("warning: fetching fixture {url}: {e}"));
                 return None;
             }
         };
@@ -1035,7 +1088,9 @@ fn load_overrides(path: Option<&str>) -> Result<BTreeMap<String, Map<String, Val
     let mut out = BTreeMap::new();
     for (tool, sub) in obj {
         let sub_obj = sub.as_object().ok_or_else(|| {
-            StpError::usage(format!("overrides for {tool:?} must be a map of param → value"))
+            StpError::usage(format!(
+                "overrides for {tool:?} must be a map of param → value"
+            ))
         })?;
         out.insert(tool.clone(), sub_obj.clone());
     }
@@ -1059,8 +1114,7 @@ async fn plan_only(
         let detail = match plan {
             Plan::Skip(reason) => format!("SKIP: {reason}"),
             Plan::Run { params, .. } => {
-                let summary = serde_json::to_string(&Value::Object(params))
-                    .unwrap_or_default();
+                let summary = serde_json::to_string(&Value::Object(params)).unwrap_or_default();
                 let summary = one_line(&summary);
                 if summary.len() > 100 {
                     format!("{}…", &summary[..100])
@@ -1212,16 +1266,59 @@ mod tests {
 
     #[test]
     fn missing_resource_heuristic() {
+        // No media inputs on this tool → a checkpoint "not in list" is a missing model (SKIP).
+        let d = desc(
+            json!({"type": "object", "properties": {}}),
+            &["text-to-image"],
+        );
         let miss = JobError {
             code: "EXECUTION_FAILED".into(),
             message: "value 'sdxl.safetensors' not in list of available checkpoints".into(),
         };
-        assert!(is_missing_resource(&miss));
+        assert!(is_missing_resource(&miss, &d));
         let real = JobError {
             code: "EXECUTION_FAILED".into(),
             message: "tensor shape mismatch in attention block".into(),
         };
-        assert!(!is_missing_resource(&real));
+        assert!(!is_missing_resource(&real, &d));
+    }
+
+    #[test]
+    fn media_input_not_in_list_is_real_failure() {
+        // A tool with a required video input. ComfyUI rejects an uploaded video that didn't
+        // register in StimmaVideoParam's COMBO list — that's a wiring bug, so FAIL not SKIP.
+        let vid = desc(
+            json!({
+                "type": "object",
+                "required": ["input_videos", "checkpoint"],
+                "properties": {
+                    "input_videos": {"type": "array", "x-control": "video_picker"},
+                    "checkpoint": {"type": "string", "enum": ["a.safetensors"]}
+                }
+            }),
+            &["upscale-video"],
+        );
+
+        // Rejected media input → real failure (the node class names the media param).
+        let media_reject = JobError {
+            code: "EXECUTION_FAILED".into(),
+            message: "ComfyUI prompt has node validation errors: #26 (StimmaVideoParam): Value not in list".into(),
+        };
+        assert!(
+            !is_missing_resource(&media_reject, &vid),
+            "rejected video input must FAIL, not SKIP"
+        );
+
+        // A missing checkpoint on the *same* tool still SKIPs — it names a model loader, not a
+        // media param.
+        let ckpt_missing = JobError {
+            code: "EXECUTION_FAILED".into(),
+            message: "#3 (CheckpointLoaderSimple): Value 'sdxl.safetensors' not in list".into(),
+        };
+        assert!(
+            is_missing_resource(&ckpt_missing, &vid),
+            "missing checkpoint option must SKIP"
+        );
     }
 
     #[test]
