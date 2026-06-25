@@ -11,6 +11,7 @@ mod connect;
 mod ctx;
 mod params;
 mod render;
+mod sweep;
 
 use clap::Parser;
 use cli::{Cli, Command};

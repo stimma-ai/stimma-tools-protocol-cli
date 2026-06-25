@@ -157,6 +157,7 @@ pub async fn run_connected(global: &GlobalOpts, ctx: &Ctx, command: Command) -> 
         Command::Raw(a) => cmd_raw(&mut session, a).await,
         Command::Watch(a) => cmd_watch(&mut session, a).await,
         Command::Run(a) => cmd_run(&mut session, ctx, a).await,
+        Command::Sweep(a) => crate::sweep::cmd_sweep(&mut session, ctx, a).await,
         _ => unreachable!("non-connected command routed here"),
     }
 }
