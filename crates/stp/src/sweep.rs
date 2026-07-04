@@ -1264,6 +1264,10 @@ mod tests {
             Kind::Video
         );
         assert_eq!(
+            expected_output_kind(&desc(json!({}), &["video-to-video"])),
+            Kind::Video
+        );
+        assert_eq!(
             expected_output_kind(&desc(json!({}), &["text-to-speech"])),
             Kind::Audio
         );
