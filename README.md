@@ -10,7 +10,7 @@ It implements the host (client) side of STP only; provider implementations live 
 ([Python](https://github.com/stimma-ai/stimma-tools-protocol-python),
 [TypeScript](https://github.com/stimma-ai/stimma-tools-protocol-ts)).
 
-See [`SPEC.md`](SPEC.md) for the full design.
+See the [Stimma Tools Protocol spec](https://github.com/stimma-ai/stimma-tools-protocol) for the full design.
 
 ## Install
 
