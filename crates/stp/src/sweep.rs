@@ -99,8 +99,37 @@ fn expected_output_kind(desc: &ToolDescriptor) -> Kind {
 fn media_input_kind(control: &str) -> Kind {
     match control {
         "video_picker" => Kind::Video,
+        "audio_picker" => Kind::Audio,
         _ => Kind::Image, // image_picker, video_frame_picker (still frame), mask_editor
     }
+}
+
+/// Fixture kind a named media param consumes.
+fn media_kind_of(desc: &ToolDescriptor, name: &str) -> Kind {
+    desc.property(name)
+        .and_then(|p| p.get("x-control"))
+        .and_then(|c| c.as_str())
+        .map(media_input_kind)
+        .unwrap_or(Kind::Image)
+}
+
+/// Slots a media param needs filled: some inputs are positional sets (a stitch
+/// takes two clips), so one fixture is not a valid request.
+fn media_min_items(desc: &ToolDescriptor, name: &str) -> usize {
+    desc.property(name)
+        .and_then(|p| p.get("x-min-items").or_else(|| p.get("minItems")))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(1) as usize
+}
+
+/// Minimum this `anyOf` branch demands of a param (branches may tighten it).
+fn branch_min_items(branch: &Value, name: &str) -> usize {
+    branch
+        .get("properties")
+        .and_then(|p| p.get(name))
+        .and_then(|p| p.get("minItems"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(1) as usize
 }
 
 // ---- report -----------------------------------------------------------------
@@ -221,8 +250,9 @@ pub async fn cmd_sweep(session: &mut Session, ctx: &Ctx, args: SweepArgs) -> Res
 enum Plan {
     Run {
         params: Map<String, Value>,
-        /// (param name, local fixture path, array-valued) to upload before executing.
-        media: Vec<(String, PathBuf, bool)>,
+        /// (param name, local fixture path, array-valued, slots to fill) to
+        /// upload before executing. A multi-slot input repeats the same asset.
+        media: Vec<(String, PathBuf, bool, usize)>,
     },
     Skip(String),
 }
@@ -242,20 +272,84 @@ async fn build_plan(
         if !required.contains(&m.name) {
             continue;
         }
-        let kind = desc
-            .property(&m.name)
-            .and_then(|p| p.get("x-control"))
-            .and_then(|c| c.as_str())
-            .map(media_input_kind)
-            .unwrap_or(Kind::Image);
+        let kind = media_kind_of(desc, &m.name);
         match fixtures.resolve(kind).await {
-            Some(path) => media.push((m.name.clone(), path, m.array)),
+            // A multi-slot input (e.g. a stitch needing two clips) declares
+            // `x-min-items`; sending one fixture fails validation on the
+            // provider, so repeat the fixture up to the declared minimum.
+            Some(path) => media.push((m.name.clone(), path, m.array, media_min_items(desc, &m.name))),
             None => {
                 return Plan::Skip(format!(
                     "no {} fixture for required input {:?}",
                     kind.label(),
                     m.name
                 ))
+            }
+        }
+    }
+
+    // Cross-field alternatives: a tool may accept several kinds of reference
+    // input where each is individually OPTIONAL but at least one is required
+    // (`anyOf`). Nothing above fills those, so satisfy the cheapest branch we
+    // have a fixture for — otherwise the request is rejected before it runs.
+    if let Some(branches) = desc
+        .parameter_schema
+        .get("anyOf")
+        .and_then(|v| v.as_array())
+    {
+        let branch_names = |b: &Value| -> Vec<String> {
+            b.get("required")
+                .and_then(|r| r.as_array())
+                .map(|r| r.iter().filter_map(|n| n.as_str().map(String::from)).collect())
+                .unwrap_or_default()
+        };
+        let satisfied = branches.iter().any(|b| {
+            let names = branch_names(b);
+            !names.is_empty() && names.iter().all(|n| media.iter().any(|(mn, _, _, _)| mn == n))
+        });
+        if !satisfied {
+            let mut filled = false;
+            // Prefer an image branch: the cheapest fixture and the fastest run.
+            let mut ordered: Vec<&Value> = branches.iter().collect();
+            ordered.sort_by_key(|b| {
+                branch_names(b)
+                    .first()
+                    .map(|n| match media_kind_of(desc, n) {
+                        Kind::Image => 0,
+                        Kind::Video => 1,
+                        _ => 2,
+                    })
+                    .unwrap_or(3)
+            });
+            'branches: for b in ordered {
+                let names = branch_names(b);
+                if names.is_empty() {
+                    continue;
+                }
+                let mut staged = Vec::new();
+                for n in &names {
+                    if !media_names.contains(&n.as_str()) {
+                        continue 'branches; // not a media param — can't satisfy generically
+                    }
+                    match fixtures.resolve(media_kind_of(desc, n)).await {
+                        Some(path) => staged.push((
+                            n.clone(),
+                            path,
+                            media_params.iter().find(|m| &m.name == n).map(|m| m.array).unwrap_or(true),
+                            branch_min_items(b, n).max(media_min_items(desc, n)),
+                        )),
+                        None => continue 'branches,
+                    }
+                }
+                media.extend(staged);
+                filled = true;
+                break;
+            }
+            if !filled {
+                return Plan::Skip(
+                    "no fixture satisfies any of the tool's alternative input requirements"
+                        .to_string(),
+                );
             }
         }
     }
@@ -323,10 +417,11 @@ async fn build_plan(
 
     // Insert fixture file paths into media params (validated as strings; replaced with asset
     // ids at upload time).
-    for (name, path, array) in &media {
+    for (name, path, array, min_items) in &media {
         let s = Value::String(path.to_string_lossy().to_string());
         if *array {
-            params.insert(name.clone(), json!([s]));
+            let n = (*min_items).max(1);
+            params.insert(name.clone(), Value::Array(vec![s; n]));
         } else {
             params.insert(name.clone(), s);
         }
@@ -383,14 +478,15 @@ async fn sweep_one(
     }
 
     // Upload fixtures, swapping the file path for a fresh asset id.
-    for (name, file, array) in &media {
+    for (name, file, array, min_items) in &media {
         let bytes = std::fs::read(file)
             .map_err(|e| StpError::usage(format!("reading fixture {}: {e}", file.display())))?;
         let ext = file.extension().and_then(|e| e.to_str()).unwrap_or("bin");
         let id = new_asset_id(ext);
         session.asset_store.put(&id, bytes).await?;
         if *array {
-            params.insert(name.clone(), json!([id]));
+            let n = (*min_items).max(1);
+            params.insert(name.clone(), Value::Array(vec![Value::String(id); n]));
         } else {
             params.insert(name.clone(), json!(id));
         }
