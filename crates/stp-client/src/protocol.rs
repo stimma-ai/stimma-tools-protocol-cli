@@ -237,9 +237,8 @@ impl RegistrationResponse {
             session_id,
             stp_version: STP_VERSION,
             host_version: HOST_VERSION,
-            // `stp` advertises no optional host-side features today — but we say so
-            // explicitly with an empty object rather than omitting the field.
-            capabilities: Value::Object(Default::default()),
+            // Typed media companions can be downloaded and reused by the host.
+            capabilities: serde_json::json!({"media_sidecars": true}),
         }
     }
 }
@@ -252,6 +251,10 @@ pub struct Asset {
     pub r#type: Option<String>,
     #[serde(default)]
     pub role: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sidecars: Vec<Value>,
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, Value>,
 }
 
 impl Asset {

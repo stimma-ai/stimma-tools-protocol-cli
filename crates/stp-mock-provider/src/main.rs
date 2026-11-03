@@ -81,6 +81,7 @@ fn descriptors() -> Value {
                         "prompt": { "type": "string", "x-control": "prompt_editor" },
                         "input_images": { "type": "array", "items": {"type": "string"},
                                           "x-control": "image_picker",
+                                          "x-accept-sidecars": [{"format":"example.opaque", "format_version":1}],
                                           "x-min-items": 1, "x-max-items": 4 }
                     }
                 },
@@ -153,7 +154,7 @@ async fn main() {
             // Product identity, `Name/Version` per the spec — fixed by the implementation.
             "server": concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION")),
             "max_concurrent": 2,
-            "capabilities": { "cancel": true }
+            "capabilities": { "cancel": true, "media_sidecars": true }
         },
         "id": 1
     }))
@@ -198,7 +199,7 @@ async fn main() {
                 out.send(&json!({"jsonrpc":"2.0","method":"queue.status",
                     "params":{"queued":0,"running":1,"capacity":2}}))
                     .await;
-                handle_execute(&mut out, tool, &req_id, &p).await;
+                handle_execute(&mut out, tool, &req_id, &p, &params["input_sidecars"]).await;
                 out.send(&json!({"jsonrpc":"2.0","method":"queue.status",
                     "params":{"queued":0,"running":0,"capacity":2}}))
                     .await;
@@ -214,7 +215,7 @@ async fn main() {
     }
 }
 
-async fn handle_execute(out: &mut Out, tool: &str, req_id: &str, params: &Value) {
+async fn handle_execute(out: &mut Out, tool: &str, req_id: &str, params: &Value, sidecars: &Value) {
     // progress
     for p in [0.0_f64, 0.5, 1.0] {
         out.send(&json!({"jsonrpc":"2.0","method":"tools.progress",
@@ -265,12 +266,32 @@ async fn handle_execute(out: &mut Out, tool: &str, req_id: &str, params: &Value)
             let id = out.new_asset("png");
             let mut f = std::fs::File::create(asset_path().join(&id)).unwrap();
             f.write_all(&bytes).unwrap();
-            out.send(&result_one(req_id, &id)).await;
+            let mut result = result_one(req_id, &id);
+            let entry = input
+                .and_then(|primary| sidecars[primary].as_array())
+                .and_then(|a| a.first());
+            let loaded = entry
+                .and_then(|e| e["asset_id"].as_str())
+                .and_then(|id| std::fs::read(asset_path().join(id)).ok());
+            result["params"]["metadata"]["companion_loaded"] =
+                json!(loaded.as_deref() == Some(b"opaque fixture".as_slice()));
+            result["params"]["metadata"]["companion_status"] =
+                entry.map_or(Value::Null, |e| e["status"].clone());
+            out.send(&result).await;
         }
         _ => {
-            // t2i and anything else: one image.
+            // Opt-in companion fixture leaves existing descriptors/snapshots unchanged.
             let id = write_png(out);
-            out.send(&result_one(req_id, &id)).await;
+            let mut result = result_one(req_id, &id);
+            if params["prompt"].as_str() == Some("__companion_fixture__") {
+                let state = out.new_asset("bin");
+                std::fs::write(asset_path().join(&state), b"opaque fixture").unwrap();
+                result["params"]["output"]["assets"][0]["sidecars"] = json!([{
+                    "asset_id":state, "format":"example.opaque", "format_version":1,
+                    "descriptor":{"anything":[1,true,{"custom":"payload"}]}
+                }]);
+            }
+            out.send(&result).await;
         }
     }
 }

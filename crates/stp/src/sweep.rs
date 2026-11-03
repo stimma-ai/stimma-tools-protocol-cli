@@ -277,7 +277,12 @@ async fn build_plan(
             // A multi-slot input (e.g. a stitch needing two clips) declares
             // `x-min-items`; sending one fixture fails validation on the
             // provider, so repeat the fixture up to the declared minimum.
-            Some(path) => media.push((m.name.clone(), path, m.array, media_min_items(desc, &m.name))),
+            Some(path) => media.push((
+                m.name.clone(),
+                path,
+                m.array,
+                media_min_items(desc, &m.name),
+            )),
             None => {
                 return Plan::Skip(format!(
                     "no {} fixture for required input {:?}",
@@ -300,12 +305,19 @@ async fn build_plan(
         let branch_names = |b: &Value| -> Vec<String> {
             b.get("required")
                 .and_then(|r| r.as_array())
-                .map(|r| r.iter().filter_map(|n| n.as_str().map(String::from)).collect())
+                .map(|r| {
+                    r.iter()
+                        .filter_map(|n| n.as_str().map(String::from))
+                        .collect()
+                })
                 .unwrap_or_default()
         };
         let satisfied = branches.iter().any(|b| {
             let names = branch_names(b);
-            !names.is_empty() && names.iter().all(|n| media.iter().any(|(mn, _, _, _)| mn == n))
+            !names.is_empty()
+                && names
+                    .iter()
+                    .all(|n| media.iter().any(|(mn, _, _, _)| mn == n))
         });
         if !satisfied {
             let mut filled = false;
@@ -335,7 +347,11 @@ async fn build_plan(
                         Some(path) => staged.push((
                             n.clone(),
                             path,
-                            media_params.iter().find(|m| &m.name == n).map(|m| m.array).unwrap_or(true),
+                            media_params
+                                .iter()
+                                .find(|m| &m.name == n)
+                                .map(|m| m.array)
+                                .unwrap_or(true),
                             branch_min_items(b, n).max(media_min_items(desc, n)),
                         )),
                         None => continue 'branches,

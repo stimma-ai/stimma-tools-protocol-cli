@@ -425,3 +425,59 @@ fn config_add_list_remove_roundtrip() {
         .success()
         .stdout(predicate::str::contains("box").not());
 }
+
+#[test]
+fn opaque_companion_download_reuse_and_missing_file_fallback() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = stp()
+        .current_dir(dir.path())
+        .args(["run", "t2i", "__companion_fixture__", "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let generated: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(
+        generated["output"]["assets"][0]["sidecars"][0]["format"],
+        "example.opaque"
+    );
+    let primary = generated["paths"][0].as_str().unwrap();
+    let manifest_path = format!("{primary}.stimma-sidecars.json");
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
+    assert_eq!(
+        manifest["sidecars"][0]["descriptor"]["anything"][2]["custom"],
+        "payload"
+    );
+    let run_edit = || {
+        let out = stp()
+            .args([
+                "run",
+                "edit",
+                "same",
+                "--input_images",
+                primary,
+                "--json",
+                "--no-download",
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        serde_json::from_slice::<serde_json::Value>(&out.stdout).unwrap()
+    };
+    assert_eq!(run_edit()["metadata"]["companion_loaded"], true);
+    let raw = dir
+        .path()
+        .join(manifest["sidecars"][0]["file"].as_str().unwrap());
+    std::fs::remove_file(raw).unwrap();
+    let fallback = run_edit();
+    assert_eq!(fallback["metadata"]["companion_loaded"], false);
+    assert_eq!(fallback["metadata"]["companion_status"], "unavailable");
+}

@@ -11,6 +11,7 @@ mod connect;
 mod ctx;
 mod params;
 mod render;
+mod sidecars;
 mod sweep;
 
 use clap::Parser;

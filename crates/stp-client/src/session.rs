@@ -190,13 +190,38 @@ impl Session {
             .map_err(|e| StpError::protocol(format!("bad tool descriptors: {e}")))
     }
 
-    /// Send `tools.execute`, require the `accepted: true` ack, then pump progress/queue
-    /// notifications until the terminal `tools.result` for `request_id`.
+    /// Execute with ordinary media only; retained for existing client callers.
     pub async fn execute<P, Q>(
         &mut self,
         request_id: &str,
         tool_id: &str,
         parameters: Value,
+        on_progress: P,
+        on_queue: Q,
+    ) -> Result<JobResult>
+    where
+        P: FnMut(&Progress),
+        Q: FnMut(&QueueStatus),
+    {
+        self.execute_with_sidecars(
+            request_id,
+            tool_id,
+            parameters,
+            Value::Null,
+            on_progress,
+            on_queue,
+        )
+        .await
+    }
+
+    /// Send `tools.execute`, require the `accepted: true` ack, then pump progress/queue
+    /// notifications until the terminal `tools.result` for `request_id`.
+    pub async fn execute_with_sidecars<P, Q>(
+        &mut self,
+        request_id: &str,
+        tool_id: &str,
+        parameters: Value,
+        input_sidecars: Value,
         mut on_progress: P,
         mut on_queue: Q,
     ) -> Result<JobResult>
@@ -205,15 +230,20 @@ impl Session {
         Q: FnMut(&QueueStatus),
     {
         let id = self.alloc_id();
-        let req = Request::new(
-            "tools.execute",
-            Some(json!({
-                "request_id": request_id,
-                "tool_id": tool_id,
-                "parameters": parameters,
-            })),
-            id.clone(),
-        );
+        let mut params =
+            json!({"request_id": request_id, "tool_id": tool_id, "parameters": parameters});
+        if self
+            .provider
+            .capabilities
+            .extra
+            .get("media_sidecars")
+            .and_then(Value::as_bool)
+            == Some(true)
+            && input_sidecars.is_object()
+        {
+            params["input_sidecars"] = input_sidecars;
+        }
+        let req = Request::new("tools.execute", Some(params), id.clone());
         self.send(serde_json::to_string(&req)?).await?;
 
         let mut acked = false;

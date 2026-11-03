@@ -423,6 +423,7 @@ async fn cmd_run(session: &mut Session, ctx: &Ctx, a: RunArgs) -> Result<()> {
     validate(&desc, &parsed)?;
 
     // Upload inputs once; the same asset ids are reused across every run in a batch.
+    let mut input_sidecars = serde_json::Map::new();
     for (param, file, _array) in &plan {
         let bytes = std::fs::read(file)
             .map_err(|e| StpError::usage(format!("reading input {file}: {e}")))?;
@@ -434,6 +435,11 @@ async fn cmd_run(session: &mut Session, ctx: &Ctx, a: RunArgs) -> Result<()> {
         session.asset_store.put(&id, bytes).await?;
         ctx.note(format!("uploading {file} → {id}"));
         replace_or_push_media(&mut parsed.params, &desc, param, file, &id);
+        let leaf = crate::sidecars::media_schema(&desc.parameter_schema, param);
+        let companions = crate::sidecars::upload(session, Path::new(file), &leaf).await;
+        if !companions.is_empty() {
+            input_sidecars.insert(id, Value::Array(companions));
+        }
     }
 
     let count = parsed.count;
@@ -480,6 +486,7 @@ async fn cmd_run(session: &mut Session, ctx: &Ctx, a: RunArgs) -> Result<()> {
             session,
             &tool,
             Value::Object(parsed.params.clone()),
+            Value::Object(input_sidecars.clone()),
             &req_id,
             parsed.timeout,
             prefix,
@@ -511,9 +518,7 @@ async fn cmd_run(session: &mut Session, ctx: &Ctx, a: RunArgs) -> Result<()> {
         let mut record = json!({
             "request_id": req_id,
             "success": true,
-            "output": { "assets": assets.iter().map(|x| json!({
-                "asset_id": x.asset_id, "type": x.r#type, "role": x.role,
-            })).collect::<Vec<_>>() },
+            "output": { "assets": assets },
             "paths": written,
         });
         // Only surface `metadata` when the provider actually sent some — an empty `{}` reads
@@ -539,6 +544,7 @@ async fn execute_one(
     session: &mut Session,
     tool: &str,
     params_value: Value,
+    input_sidecars: Value,
     request_id: &str,
     timeout: Option<u64>,
     pb_prefix: Option<String>,
@@ -561,10 +567,11 @@ async fn execute_one(
             }
         };
         let mut on_queue = |_q: &QueueStatus| {};
-        let exec = session.execute(
+        let exec = session.execute_with_sidecars(
             request_id,
             tool,
             params_value,
+            input_sidecars,
             &mut on_progress,
             &mut on_queue,
         );
@@ -666,6 +673,14 @@ fn build_upload_plan(desc: &ToolDescriptor, parsed: &ParsedRun) -> Vec<(String, 
             }
         }
     }
+    if !parsed.no_auto_upload {
+        crate::sidecars::nested_media(
+            &Value::Object(parsed.params.clone()),
+            &desc.parameter_schema,
+            "",
+            &mut plan,
+        );
+    }
     plan
 }
 
@@ -693,6 +708,16 @@ fn replace_or_push_media(
     file: &str,
     id: &str,
 ) {
+    if param.starts_with('/') {
+        let mut value = Value::Object(params.clone());
+        if let Some(leaf) = value.pointer_mut(param) {
+            *leaf = Value::String(id.to_string());
+        }
+        if let Some(object) = value.as_object() {
+            *params = object.clone();
+        }
+        return;
+    }
     // Forced inputs aren't in params yet; auto inputs are present as the file path.
     let array = media_array(desc, param).unwrap_or(true);
     match params.get_mut(param) {
@@ -832,6 +857,18 @@ async fn deliver_outputs(
                     written.push(abs_path(&path.to_string_lossy()));
                 }
             }
+        }
+    }
+
+    // Download companions before removing their provider references.
+    if !matches!(parsed.output, OutputMode::None | OutputMode::Stdout) {
+        for (index, path) in written.iter().enumerate() {
+            let asset = if matches!(parsed.output, OutputMode::File(_)) {
+                select_asset(assets, parsed.role.as_deref())?
+            } else {
+                &assets[index]
+            };
+            crate::sidecars::download(session, asset, Path::new(path), parsed.keep_remote).await?;
         }
     }
 
